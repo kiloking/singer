@@ -8,13 +8,21 @@
     "start": "node server.js",
     "dev": "node server.js"
   },
-  "keywords": ["lyrics", "youtube-music", "ktv", "obs", "karaoke"],
+  "keywords": [
+    "lyrics",
+    "youtube-music",
+    "ktv",
+    "obs",
+    "karaoke"
+  ],
   "author": "",
   "license": "MIT",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@hydralerne/youtube-api": "^1.1.5",
     "express": "^4.21.0",
-    "ws": "^8.18.0"
+    "youtube-transcript": "^1.2.1"
   }
 }

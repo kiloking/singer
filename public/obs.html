@@ -118,7 +118,7 @@
     <div class="title-bar" id="titleBar"></div>
     <div class="time-stamp" id="timeStamp"></div>
     <div class="lyrics-container" id="lyrics">
-      <div class="lyrics-line waiting">
+      <div class="lyrics-line waiting" id="waitingMsg">
         在主頁選擇歌曲並播放，歌詞將同步顯示
       </div>
     </div>
@@ -132,7 +132,8 @@
       const lyricsEl = document.getElementById("lyrics");
       const titleBar = document.getElementById("titleBar");
       const timeStampEl = document.getElementById("timeStamp");
-      const API = "/api/sync/state";
+      const sid = new URLSearchParams(location.search).get("sid");
+      const API = sid ? `/api/sync/state?sid=${encodeURIComponent(sid)}` : null;
       const VISIBLE_LINES = 5;
       /** highlight 填滿速度：1=同步，1.2=快 20%，1.5=快 50% */
       const HIGHLIGHT_SPEED =
@@ -267,7 +268,13 @@
         return `${m}:${String(s).padStart(2, "0")}`;
       }
 
+      if (!sid) {
+        lyricsEl.innerHTML =
+          '<div class="lyrics-line waiting">請從主頁複製 OBS 網址（含 ?sid=）後貼到 OBS</div>';
+      }
+
       async function poll() {
+        if (!API) return;
         try {
           const res = await fetch(API);
           const data = await res.json();
@@ -284,8 +291,10 @@
         } catch (_) {}
       }
 
-      poll();
-      setInterval(poll, 80);
+      if (API) {
+        poll();
+        setInterval(poll, 80);
+      }
     </script>
   </body>
 </html>

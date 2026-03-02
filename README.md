@@ -20,10 +20,11 @@ npm start
 
 ## OBS 設定
 
-1. OBS → 來源 → 新增 → 瀏覽器
-2. URL 填：`http://localhost:3847/obs`
-3. 寬高建議 1920×1080，背景透明
-4. 在主頁選擇歌曲並播放，OBS 畫面會同步顯示歌詞
+1. 開啟主頁，網址會自動帶上 `?sid=xxx`（每人獨立）
+2. OBS → 來源 → 新增 → 瀏覽器
+3. URL 填主頁顯示的 OBS 網址（含 `?sid=xxx`，多人使用互不干擾）
+4. 寬高建議 1920×1080，背景透明
+5. 在主頁選擇歌曲並播放，OBS 畫面會同步顯示歌詞
 
 ## 雲端部署
 
@@ -52,4 +53,6 @@ docker run -p 3847:3847 singer
 
 - Node.js + Express
 - @hydralerne/youtube-api（YT Music 搜尋與歌詞）
-- WebSocket 同步主頁與 OBS widget
+- youtube-transcript（影片 CC 字幕備援）
+- LRCLIB（社群歌詞備援）
+- Provider 鏈：YT Music → LRCLIB → YouTube Captions

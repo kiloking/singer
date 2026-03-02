@@ -30,14 +30,15 @@ singer/
 
 1. **搜尋** `/api/search?q=` → YT Music 歌曲列表
 2. **歌詞** `/api/lyrics/:videoId?title=&artist=&duration=` → getSongLyrics，若無 synced 則 LRCLIB 備援
-3. **主頁** 選擇歌曲 → YouTube 嵌入播放 → 歌詞 KTV 高亮 → POST `/api/sync` 廣播
-4. **OBS** 開啟 `/obs` → WebSocket 接收 sync → 顯示歌詞 overlay
+3. **主頁** 選擇歌曲 → YouTube 嵌入播放 → 歌詞 KTV 高亮 → POST `/api/sync`（帶 sid）
+4. **OBS** 開啟 `/obs?sid=xxx` → 輪詢 `/api/sync/state?sid=xxx` → 顯示歌詞 overlay
+5. **多人隔離**：每人有獨立 sid，sync 狀態以 sid 分開儲存
 
-## Phase 1 規劃（進行中）
+## Phase 1（已完成）
 
 1. **Provider 鏈**：YT Music → LRCLIB → YouTube Captions（依序 fallback）
-2. **YouTube Captions**：從影片 CC 取得時間軸，作為第三來源
-3. **OBS 顯示**：多行歌詞、當前句高亮、其餘變暗、右下角時間戳（已實作）
+2. **YouTube Captions**：youtube-transcript 從影片 CC 取得時間軸
+3. **OBS 顯示**：多行歌詞、當前句高亮、其餘變暗、右下角時間戳
 
 ## 法則
 

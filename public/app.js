@@ -6,6 +6,22 @@
  */
 
 const API = '/api';
+
+// 每人獨立 sid，多人使用互不干擾
+function getOrCreateSid() {
+  const params = new URLSearchParams(location.search);
+  let sid = params.get('sid');
+  if (!sid || sid.length < 6) {
+    sid = Math.random().toString(36).slice(2, 10);
+    const url = new URL(location.href);
+    url.searchParams.set('sid', sid);
+    location.replace(url.pathname + url.search);
+    return null;
+  }
+  return sid;
+}
+const SID = getOrCreateSid();
+
 let ytPlayer = null;
 let currentTrack = null;
 let lyricsData = null;
@@ -22,8 +38,8 @@ const ytEmbed = document.getElementById('ytEmbed');
 const lyricsBox = document.getElementById('lyricsBox');
 const obsUrlEl = document.getElementById('obsUrl');
 
-// 更新 OBS URL 為當前 host
-obsUrlEl.textContent = `${location.origin}/obs`;
+// 更新 OBS URL（含 sid，每人獨立）
+if (SID) obsUrlEl.textContent = `${location.origin}/obs?sid=${SID}`;
 
 // -----------------------------------------------------------------------------
 // 搜尋
@@ -214,10 +230,12 @@ function startSync() {
     const t = ytPlayer.getCurrentTime?.();
     if (typeof t !== 'number' || t < 0) return;
     updateLyricsHighlight(t);
+    if (!SID) return;
     fetch(`${API}/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        sid: SID,
         videoId: currentTrack.videoId,
         currentTime: t,
         lyrics: lyricsData,

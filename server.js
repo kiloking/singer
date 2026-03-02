@@ -1,51 +1,45 @@
 /**
- * [INPUT]: 依賴 express、ws、@hydralerne/youtube-api
- * [OUTPUT]: HTTP 伺服器 + WebSocket 廣播，提供 /api/search、/api/lyrics、/obs、主頁
+ * [INPUT]: 依賴 express、@hydralerne/youtube-api、youtube-transcript
+ * [OUTPUT]: HTTP 伺服器，提供 /api/search、/api/lyrics、/obs、sync（依 sid 隔離）
  * [POS]: singer 專案入口，整合 API、靜態資源、OBS 同步通道
  * [PROTOCOL]: 變更時更新此頭部，然後檢查 CLAUDE.md
  */
 
 import express from 'express';
-import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { youtubeMusicSearch, getSongLyrics, getVideoId } from '@hydralerne/youtube-api';
+import { YoutubeTranscript } from 'youtube-transcript';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const server = createServer(app);
 
 // -----------------------------------------------------------------------------
-// WebSocket: OBS widget 與主頁同步播放進度
+// Sync 狀態：以 sid 隔離，多人同時使用互不干擾
 // -----------------------------------------------------------------------------
-const wss = new WebSocketServer({ server });
-const clients = new Set();
-let lastSync = null;
+const syncBySid = new Map();
+const SID_TTL_MS = 24 * 60 * 60 * 1000; // 24h 未用則清理
 
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  if (lastSync) ws.send(JSON.stringify(lastSync));
-  ws.on('close', () => clients.delete(ws));
-});
-
-function broadcast(data) {
-  lastSync = data;
-  const msg = JSON.stringify(data);
-  clients.forEach((c) => {
-    if (c.readyState === 1) c.send(msg);
-  });
+function setSync(sid, data) {
+  if (!sid) return;
+  syncBySid.set(sid, { data, at: Date.now() });
 }
 
-// 每秒重推最後狀態，避免 OBS 漏接
+function getSync(sid) {
+  if (!sid) return null;
+  const entry = syncBySid.get(sid);
+  return entry ? entry.data : null;
+}
+
+// 定期清理過期 session
 setInterval(() => {
-  if (lastSync && clients.size > 0) {
-    const msg = JSON.stringify(lastSync);
-    clients.forEach((c) => {
-      if (c.readyState === 1) c.send(msg);
-    });
+  const now = Date.now();
+  for (const [sid, entry] of syncBySid.entries()) {
+    if (now - entry.at > SID_TTL_MS) syncBySid.delete(sid);
   }
-}, 1000);
+}, 60 * 60 * 1000);
 
 // -----------------------------------------------------------------------------
 // API
@@ -84,33 +78,53 @@ function parseLrcString(lrc) {
   }));
 }
 
-/** 取得歌詞，優先 YT Music，無時間軸時用 LRCLIB 備援 */
+/** YouTube 影片 CC 字幕 → [{ text, start, end }] */
+async function fetchYtCaptions(videoId) {
+  try {
+    const items = await YoutubeTranscript.fetchTranscript(videoId);
+    if (!Array.isArray(items) || !items.length) return null;
+    return items.map(({ text, offset, duration }) => ({
+      text: String(text || '').trim(),
+      start: Number(offset) || 0,
+      end: (Number(offset) || 0) + (Number(duration) || 0)
+    })).filter((s) => s.text);
+  } catch {
+    return null;
+  }
+}
+
+/** Provider 鏈：YT Music → LRCLIB → YouTube Captions */
 app.get('/api/lyrics/:videoId', async (req, res) => {
   const { videoId } = req.params;
   const { title, artist, duration } = req.query;
   if (!videoId) return res.status(400).json({ error: '缺少 videoId' });
   try {
     let lyrics = null;
+    let synced = null;
+
+    // 1. YT Music
     try {
       lyrics = await getSongLyrics(videoId);
-    } catch (e) {
-      // YT Music API 可能回傳非預期格式，忽略後續用 LRCLIB
+      if (lyrics?.error) lyrics = null;
+      synced = Array.isArray(lyrics?.synced) && lyrics.synced.length > 0 ? lyrics.synced : null;
+    } catch {
+      lyrics = null;
     }
-    if (lyrics?.error) lyrics = null;
-    const hasSynced = Array.isArray(lyrics?.synced) && lyrics.synced.length > 0;
 
-    if (!hasSynced && title && artist) {
+    // 2. LRCLIB（需 title + artist）
+    if (!synced && title && artist) {
       const durationSec = duration ? parseInt(duration, 10) : 0;
       const lrc = await fetchLrclib(title, artist, isNaN(durationSec) ? 0 : durationSec);
-      if (lrc) {
-        const synced = parseLrcString(lrc);
-        if (synced) {
-          lyrics = lyrics || {};
-          lyrics.synced = synced;
-          lyrics.lines = synced.map((s) => ({ text: s.text }));
-        }
-      }
+      synced = lrc ? parseLrcString(lrc) : null;
+      if (synced) lyrics = { synced, lines: synced.map((s) => ({ text: s.text })) };
     }
+
+    // 3. YouTube Captions（影片 CC）
+    if (!synced) {
+      synced = await fetchYtCaptions(videoId);
+      if (synced) lyrics = { synced, lines: synced.map((s) => ({ text: s.text })) };
+    }
+
     res.json({ lyrics: lyrics || null });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -154,10 +168,11 @@ app.get('/api/video-id', async (req, res) => {
   }
 });
 
-/** 主頁發送播放進度，廣播給 OBS widget */
+/** 主頁發送播放進度，依 sid 儲存（多人隔離） */
 app.post('/api/sync', (req, res) => {
-  const { videoId, currentTime, lyrics, title, duration, lyricsColor } = req.body;
-  broadcast({
+  const { sid, videoId, currentTime, lyrics, title, duration, lyricsColor } = req.body;
+  if (!sid) return res.status(400).json({ error: '缺少 sid' });
+  setSync(sid, {
     videoId,
     currentTime: Number(currentTime) || 0,
     lyrics,
@@ -168,9 +183,10 @@ app.post('/api/sync', (req, res) => {
   res.json({ ok: true });
 });
 
-/** OBS 頁面輪詢取得當前狀態（比 WebSocket 更可靠） */
-app.get('/api/sync/state', (_, res) => {
-  res.json(lastSync || {});
+/** OBS 頁面輪詢取得當前狀態（需帶 sid） */
+app.get('/api/sync/state', (req, res) => {
+  const sid = req.query.sid;
+  res.json(getSync(sid) || {});
 });
 
 // -----------------------------------------------------------------------------
