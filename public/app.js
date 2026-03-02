@@ -110,7 +110,18 @@ async function loadLyrics(videoId) {
   if (currentTrack?.duration) q.set('duration', Math.round(currentTrack.duration / 1000));
   try {
     const res = await fetch(`${API}/lyrics/${videoId}?${q}`);
-    const { lyrics } = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const msg = text?.trim() || '';
+      if (msg === 'Not Found' || res.status === 404) {
+        throw new Error('找不到歌詞，請稍後再試');
+      }
+      throw new Error(res.ok ? '回應格式錯誤' : `伺服器錯誤 (${res.status})`);
+    }
+    const { lyrics } = data;
     lyricsData = lyrics;
     renderLyrics(lyrics);
   } catch (e) {

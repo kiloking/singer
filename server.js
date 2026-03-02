@@ -90,7 +90,12 @@ app.get('/api/lyrics/:videoId', async (req, res) => {
   const { title, artist, duration } = req.query;
   if (!videoId) return res.status(400).json({ error: '缺少 videoId' });
   try {
-    let lyrics = await getSongLyrics(videoId);
+    let lyrics = null;
+    try {
+      lyrics = await getSongLyrics(videoId);
+    } catch (e) {
+      // YT Music API 可能回傳非預期格式，忽略後續用 LRCLIB
+    }
     if (lyrics?.error) lyrics = null;
     const hasSynced = Array.isArray(lyrics?.synced) && lyrics.synced.length > 0;
 
@@ -115,10 +120,16 @@ app.get('/api/lyrics/:videoId', async (req, res) => {
 async function fetchLrclib(title, artist, durationSec) {
   const params = new URLSearchParams({ track_name: title, artist_name: artist });
   const res = await fetch(`https://lrclib.net/api/search?${params}`, {
-    headers: { 'User-Agent': 'Singer/1.0 (https://github.com/vibe-app/singer)' }
+    headers: { 'User-Agent': 'Singer/1.0 (https://github.com/kiloking/singer)' }
   });
   if (!res.ok) return null;
-  const list = await res.json();
+  const text = await res.text();
+  let list;
+  try {
+    list = JSON.parse(text);
+  } catch {
+    return null;
+  }
   if (!Array.isArray(list) || !list.length) return null;
   const withSynced = list.filter((r) => r.syncedLyrics);
   if (!withSynced.length) return null;
