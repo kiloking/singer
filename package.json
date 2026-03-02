@@ -1,0 +1,20 @@
+{
+  "name": "singer",
+  "version": "1.0.0",
+  "description": "自動歌詞工具 - 搜尋 YT Music 歌詞，KTV 字幕模式，OBS 掛載",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["lyrics", "youtube-music", "ktv", "obs", "karaoke"],
+  "author": "",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@hydralerne/youtube-api": "^1.1.5",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  }
+}

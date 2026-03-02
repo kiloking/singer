@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OBS Lyrics Widget</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        background: transparent !important;
+        overflow: hidden;
+        font-family:
+          "SF Pro Display",
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        color: #fff;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+        min-height: 100vh;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding: 2rem;
+      }
+      .lyrics-container {
+        text-align: center;
+        max-width: 90vw;
+      }
+      .lyrics-line {
+        font-size: clamp(1.5rem, 4vw, 2.5rem);
+        line-height: 1.6;
+        transition: opacity 0.2s ease;
+        opacity: 0.5;
+        display: block;
+        text-align: center;
+      }
+      /* 雙層疊合：inline-block 確保兩層同寬同高，完美對齊 */
+      .lyrics-line .line-wrap {
+        display: inline-block;
+        position: relative;
+        text-align: center;
+      }
+      /* 底層：陰影 + 純灰字色，始終存在 */
+      .lyrics-line .base {
+        color: #d9d9d9;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+      }
+      /* 上層：僅選定顏色，無陰影，柔美漸層遮罩由左至右顯現 */
+      .lyrics-line.active .highlight {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        color: var(--highlight, #ffd700);
+        text-shadow: none;
+        --p: var(--progress, 0);
+        --soft: 0.12;
+        -webkit-mask-image: linear-gradient(
+          to right,
+          black 0,
+          black calc((var(--p) - var(--soft)) * 100%),
+          transparent calc(var(--p) * 100%)
+        );
+        mask-image: linear-gradient(
+          to right,
+          black 0,
+          black calc((var(--p) - var(--soft)) * 100%),
+          transparent calc(var(--p) * 100%)
+        );
+        -webkit-mask-size: 100% 100%;
+        mask-size: 100% 100%;
+      }
+      /* 句尾填滿：progress 達 1 時整句全顯 */
+      .lyrics-line.active.full .highlight {
+        -webkit-mask-image: linear-gradient(to right, black 0, black 100%);
+        mask-image: linear-gradient(to right, black 0, black 100%);
+      }
+      .lyrics-line.active {
+        opacity: 1;
+        font-weight: 700;
+      }
+      .lyrics-line.past {
+        opacity: 0.35;
+      }
+      .lyrics-line.future {
+        opacity: 0.35;
+      }
+      .time-stamp {
+        position: fixed;
+        bottom: 1rem;
+        right: 1.5rem;
+        font-size: 0.9rem;
+        font-variant-numeric: tabular-nums;
+        color: rgba(255, 255, 255, 0.6);
+      }
+      .title-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        color: rgba(255, 255, 255, 0.6);
+      }
+      .waiting {
+        font-size: 1.25rem;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="title-bar" id="titleBar"></div>
+    <div class="time-stamp" id="timeStamp"></div>
+    <div class="lyrics-container" id="lyrics">
+      <div class="lyrics-line waiting">
+        在主頁選擇歌曲並播放，歌詞將同步顯示
+      </div>
+    </div>
+    <script>
+      /**
+       * [INPUT]: 依賴 fetch 輪詢 /api/sync/state
+       * [OUTPUT]: 顯示 KTV 歌詞，依演唱順序同步呈現（多行、當前高亮、時間戳）
+       * [POS]: singer OBS 掛載頁，透明背景供 OBS Browser Source 使用
+       * [PROTOCOL]: 變更時更新此頭部，然後檢查 CLAUDE.md
+       */
+      const lyricsEl = document.getElementById("lyrics");
+      const titleBar = document.getElementById("titleBar");
+      const timeStampEl = document.getElementById("timeStamp");
+      const API = "/api/sync/state";
+      const VISIBLE_LINES = 5;
+      /** highlight 填滿速度：1=同步，1.2=快 20%，1.5=快 50% */
+      const HIGHLIGHT_SPEED =
+        parseFloat(new URLSearchParams(location.search).get("speed")) || 1.2;
+
+      function escape(s) {
+        const d = document.createElement("div");
+        d.textContent = s == null ? "" : String(s);
+        return d.innerHTML;
+      }
+
+      function estimateSynced(lines, durationSec) {
+        if (!lines.length || !durationSec) return null;
+        const span = durationSec / lines.length;
+        return lines.map((l, i) => ({
+          text: l?.text ?? l ?? "",
+          start: i * span,
+          end: (i + 1) * span,
+        }));
+      }
+
+      let lastRenderKey = "";
+
+      function renderAndHighlight(
+        lyrics,
+        currentTime,
+        durationSec,
+        lyricsColor,
+      ) {
+        let items = [];
+        let synced = false;
+        const rawLines = (lyrics?.lines || []).map((l) => ({
+          text: l?.text ?? l ?? "",
+          start: 0,
+          end: 0,
+        }));
+        if (Array.isArray(lyrics?.synced) && lyrics.synced.length > 0) {
+          items = lyrics.synced;
+          synced = true;
+        } else if (rawLines.length && durationSec) {
+          items = estimateSynced(rawLines, durationSec);
+          synced = !!items;
+        } else {
+          items = rawLines;
+        }
+        if (!items.length) return;
+
+        let activeIdx = -1;
+        const t = Number(currentTime) || 0;
+        if (synced) {
+          for (let i = 0; i < items.length; i++) {
+            const s = Number(items[i].start) || 0;
+            const e = Number(items[i].end) || 0;
+            if (t >= s && t < e) {
+              activeIdx = i;
+              break;
+            }
+            if (t >= e) activeIdx = i;
+          }
+        } else {
+          activeIdx = 0;
+        }
+
+        const half = Math.floor(VISIBLE_LINES / 2);
+        const startIdx = Math.max(
+          0,
+          Math.min(activeIdx - half, items.length - VISIBLE_LINES),
+        );
+        const endIdx = Math.min(startIdx + VISIBLE_LINES, items.length);
+        const showIdx = [];
+        for (let i = startIdx; i < endIdx; i++) showIdx.push(i);
+        if (!showIdx.length) return;
+
+        const color = lyricsColor || "#ffd700";
+        let activeProgress = 1;
+        if (synced && activeIdx >= 0) {
+          const item = items[activeIdx];
+          const start = Number(item?.start) || 0;
+          const end = Number(item?.end) || start + 0.001;
+          const span = end - start;
+          const raw = span > 0 ? (t - start) / span : 1;
+          activeProgress = Math.min(1, Math.max(0, raw * HIGHLIGHT_SPEED));
+        }
+
+        // 僅在顯示區塊或歌詞變更時重建 DOM；其餘只更新 progress
+        const renderKey = `${startIdx}-${activeIdx}-${items
+          .map((x) => x.text)
+          .join("|")
+          .slice(0, 200)}`;
+        const needFullRender = renderKey !== lastRenderKey;
+
+        if (needFullRender) {
+          lastRenderKey = renderKey;
+          lyricsEl.innerHTML = showIdx
+            .map((i) => {
+              const item = items[i];
+              const text = item?.text ?? "";
+              let cls = "lyrics-line";
+              if (i === activeIdx) {
+                cls += " active";
+                if (activeProgress >= 0.999) cls += " full";
+              } else if (i < activeIdx) cls += " past";
+              else cls += " future";
+              const style =
+                i === activeIdx
+                  ? ` style="--progress:${activeProgress};--highlight:${color}"`
+                  : "";
+              const escaped = escape(text);
+              const base = `<span class="base">${escaped}</span>`;
+              const highlight =
+                i === activeIdx
+                  ? `<span class="highlight">${escaped}</span>`
+                  : "";
+              return `<div class="${cls}"${style} data-idx="${i}"><span class="line-wrap">${base}${highlight}</span></div>`;
+            })
+            .join("");
+        } else if (activeIdx >= 0) {
+          const activeLine = lyricsEl.querySelector(
+            `[data-idx="${activeIdx}"]`,
+          );
+          if (activeLine) {
+            activeLine.style.setProperty("--progress", activeProgress);
+            activeLine.classList.toggle("full", activeProgress >= 0.999);
+          }
+        }
+      }
+
+      function formatTime(sec) {
+        if (sec == null || isNaN(sec) || sec < 0) return "";
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${String(s).padStart(2, "0")}`;
+      }
+
+      async function poll() {
+        try {
+          const res = await fetch(API);
+          const data = await res.json();
+          const { lyrics, title, currentTime, duration } = data;
+          titleBar.textContent = title || "";
+          timeStampEl.textContent = formatTime(Number(currentTime) || 0);
+          if (lyrics)
+            renderAndHighlight(
+              lyrics,
+              currentTime,
+              Number(duration) || 0,
+              data?.lyricsColor,
+            );
+        } catch (_) {}
+      }
+
+      poll();
+      setInterval(poll, 80);
+    </script>
+  </body>
+</html>
